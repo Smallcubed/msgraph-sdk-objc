@@ -1,0 +1,100 @@
+name: Release zipped binary for distribution
+
+on:
+  push:
+    tags:        
+      - '*'
+
+jobs:
+  build:
+    name: Archive and publish as binary framework
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: ./MSGraphClientSDK/
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Archive for iOS Devices
+        run: |
+          xcodebuild archive \
+              -scheme MSGraphClientSDK \
+              -archivePath "archives/MSGraphClientSDK-iOS.xcarchive" \
+              -destination "generic/platform=iOS" \
+              -sdk iphoneos \
+              SKIP_INSTALL=NO \
+              BUILD_LIBRARY_FOR_DISTRIBUTION=YES | xcpretty && exit ${PIPESTATUS[0]}
+      - name: Archive for iOS simulators
+        run: |
+            xcodebuild archive \
+              -scheme MSGraphClientSDK \
+              -archivePath "archives/MSGraphClientSDK-iOS-simulator.xcarchive" \
+              -destination "generic/platform=iOS Simulator" \
+              -sdk iphonesimulator \
+              SKIP_INSTALL=NO \
+              BUILD_LIBRARY_FOR_DISTRIBUTION=YES | xcpretty && exit ${PIPESTATUS[0]}
+              
+      - name: Archive for macOS
+        run: |
+            xcodebuild archive \
+                -scheme MSGraphClientSDK \
+                -archivePath "archives/MSGraphClientSDK-macOS.xcarchive" \
+                -destination "generic/platform=macOS" \
+                -sdk macosx \
+                SKIP_INSTALL=NO \
+                BUILD_LIBRARY_FOR_DISTRIBUTION=YES | xcpretty && exit ${PIPESTATUS[0]}
+          
+      - name: Create Framework
+        run: | 
+          xcodebuild -create-xcframework \
+              -framework "archives/MSGraphClientSDK-iOS.xcarchive/Products/Library/Frameworks/MSGraphClientSDK.framework" \
+              -framework "archives/MSGraphClientSDK-iOS-simulator.xcarchive/Products/Library/Frameworks/MSGraphClientSDK.framework" \
+              -framework "archives/MSGraphClientSDK-macOS.xcarchive/Products/Library/Frameworks/MSGraphClientSDK.framework" \
+              -output "MSGraphClientSDK.xcframework"
+          
+      - name: Create ZIP file
+        run: zip -r -X MSGraphClientSDK.xcframework.zip MSGraphClientSDK.xcframework
+      - name: Upload xcframework to release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          file: ./MSGraphClientSDK/MSGraphClientSDK.xcframework.zip
+      - name: Calculate SPM checksum
+        run: | 
+          touch Package.swift
+          echo "SPM_CHECKSUM=$(swift package compute-checksum MSGraphClientSDK.xcframework.zip)" >> $GITHUB_ENV
+      - name: Setup SSH key
+        uses: webfactory/ssh-agent@v0.5.4
+        with:
+              ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      - name: Update SPM repo
+        run: |
+            git clone git@github.com:phil1995/msgraph-sdk-objc-spm.git
+            cd msgraph-sdk-objc-spm
+            cat > Package.swift << EOF
+            // swift-tools-version:5.3
+
+            import PackageDescription
+            let package = Package(
+                name: "MSGraphClientSDK",
+                platforms: [
+                    .macOS(.v10_10),
+                    .iOS(.v9)
+                ],
+                products: [
+                    .library(
+                        name: "MSGraphClientSDK",
+                        targets: ["MSGraphClientSDK"]),
+                ],
+                targets: [
+                    .binaryTarget(name: "MSGraphClientSDK", url: "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/MSGraphClientSDK.xcframework.zip", checksum: "$SPM_CHECKSUM") 
+                ]
+            )
+
+            EOF
+            git add Package.swift
+            VERSION_TAG=$(echo $GITHUB_REF_NAME | grep -o -E '([0-9]+\.[0-9]+\.[0-9]+)')
+            if [ "$VERSION_TAG" == "" ]; then
+              VERSION_TAG=$GITHUB_REF_NAME
+            fi
+            VERSION_TAG_REF="refs/tags/${VERSION_TAG}"
+            git diff-index --quiet HEAD || git commit -m "Version and checksum update for $VERSION_TAG" && git tag $VERSION_TAG && git push origin main && git push origin $VERSION_TAG_REF
