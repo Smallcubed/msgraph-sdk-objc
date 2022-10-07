@@ -1,13 +1,17 @@
-// swift-tools-version:5.1
+// swift-tools-version:5.3
 import PackageDescription
+
+
 let package = Package(
 	name: "MSGraphClientSDK",
 	platforms: [
 		.iOS(.v9),
-		.macOS(.v10_10)
+		.macOS(.v10_12)
 	],
 	products: [
-		.library(name: "MSGraphClientSDK", targets: ["MSGraphClientSDK"])
+		.library(name: "MSGraphClientSDK",
+                 type: .dynamic,
+                 targets: ["MSGraphClientSDK"])
 	],
 	targets: [
 		.target(
